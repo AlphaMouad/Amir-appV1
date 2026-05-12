@@ -22,13 +22,19 @@ service cloud.firestore {
     }
 
     function isValidTrade(data) {
-      return data.keys().hasAll(['projectId', 'designation', 'amount', 'totalAdvances', 'createdAt', 'updatedAt', 'ownerId'])
+      return data.keys().hasAll(['projectId', 'designation', 'createdAt', 'updatedAt', 'ownerId'])
         && data.projectId is string && data.projectId.size() <= 128
         && data.designation is string && data.designation.size() > 0 && data.designation.size() <= 100
+        // New fields
+        && (data.budget == null || data.budget is number)
+        && (data.totalClientAdvances == null || data.totalClientAdvances is number)
+        && (data.totalMainDoeuvre == null || data.totalMainDoeuvre is number)
+        && (data.totalFourniture == null || data.totalFourniture is number)
+        // Backward compat fields
+        && (data.amount == null || data.amount is number)
+        && (data.totalAdvances == null || data.totalAdvances is number)
         && (data.supplierName == null || (data.supplierName is string && data.supplierName.size() <= 100))
         && (data.quantity == null || data.quantity is number)
-        && data.amount is number
-        && data.totalAdvances is number
         && data.createdAt is timestamp
         && data.updatedAt is timestamp
         && data.ownerId == request.auth.uid;
@@ -40,8 +46,12 @@ service cloud.firestore {
         && data.tradeId is string && data.tradeId.size() <= 128
         && data.date is timestamp
         && data.amount is number
-        && data.type in ['advance', 'expense', 'income']
-        && (data.designation == null || (data.designation is string && data.designation.size() <= 100))
+        && data.type in ['advance', 'expense', 'income', 'client_advance', 'main_doeuvre', 'fourniture']
+        && (data.designation == null || (data.designation is string && data.designation.size() <= 200))
+        && (data.workerName == null || (data.workerName is string && data.workerName.size() <= 100))
+        && (data.paymentMethod == null || data.paymentMethod in ['especes', 'virement', 'cheque'])
+        && (data.blReference == null || (data.blReference is string && data.blReference.size() <= 100))
+        && (data.receiptUrl == null || (data.receiptUrl is string && data.receiptUrl.size() <= 500))
         && data.createdAt is timestamp
         && data.ownerId == request.auth.uid;
     }
@@ -84,7 +94,7 @@ service cloud.firestore {
           
         allow update: if (
           isSignedIn() && isValidTrade(incoming()) && (
-            incoming().diff(existing()).affectedKeys().hasOnly(['designation', 'supplierName', 'quantity', 'amount', 'totalAdvances', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['designation', 'supplierName', 'quantity', 'amount', 'budget', 'totalAdvances', 'totalClientAdvances', 'totalMainDoeuvre', 'totalFourniture', 'updatedAt'])
           ) && incoming().updatedAt == request.time
             && incoming().createdAt == existing().createdAt
             && incoming().ownerId == existing().ownerId
@@ -110,4 +120,3 @@ service cloud.firestore {
     }
   }
 }
-
