@@ -3,8 +3,8 @@ import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getProjects, getTrades, addTrade, updateTrade, getPayments, addPayment } from '../services/api';
-import { Project, Trade, Payment } from '../types';
-import { ArrowLeft, Plus, AlertCircle, Wallet, Building2 } from 'lucide-react';
+import { Project, Trade, Payment, PaymentType } from '../types';
+import { ArrowLeft, Plus, AlertCircle, Wallet, Building2, User } from 'lucide-react';
 import { format } from 'date-fns';
 import { ImageUpload } from '../components/ui/ImageUpload';
 import { LazyImage } from '../components/ui/LazyImage';
@@ -38,7 +38,13 @@ export default function ProjectDetail() {
   const [isSavingTrade, setIsSavingTrade] = useState(false);
 
   const [addingPayment, setAddingPayment] = useState(false);
-  const [newPayment, setNewPayment] = useState({ amount: 0, date: new Date().toISOString().substring(0, 10), designation: '' });
+  const [newPayment, setNewPayment] = useState({
+    amount: 0,
+    date: new Date().toISOString().substring(0, 10),
+    designation: '',
+    type: 'client_advance' as PaymentType,
+    workerNames: ''
+  });
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [isSavingPayment, setIsSavingPayment] = useState(false);
 
@@ -79,8 +85,10 @@ export default function ProjectDetail() {
     );
   }
 
-  const totalBudget = trades.reduce((sum, t) => sum + t.amount, 0);
-  const totalAdvances = trades.reduce((sum, t) => sum + t.totalAdvances, 0);
+  const totalBudget = trades.reduce((sum, t) => sum + (t.budget || t.amount || 0), 0);
+  const totalClientAdvances = trades.reduce((sum, t) => sum + (t.totalClientAdvances || t.totalAdvances || 0), 0);
+  const totalExpenses = trades.reduce((sum, t) => sum + (t.totalLaborExpenses || 0) + (t.totalMaterialExpenses || 0), 0);
+  const projectBalance = totalClientAdvances - totalExpenses;
 
   const handleAddTrade = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,10 +97,14 @@ export default function ProjectDetail() {
     try {
       await addTrade(id, {
         designation: newTrade.designation,
+        budget: Number(newTrade.amount),
         amount: Number(newTrade.amount),
         quantity: Number(newTrade.quantity),
         supplierName: newTrade.supplierName,
+        totalClientAdvances: 0,
         totalAdvances: 0,
+        totalLaborExpenses: 0,
+        totalMaterialExpenses: 0,
         ownerId: user.uid,
       });
       setAddingTrade(false);
@@ -114,22 +126,36 @@ export default function ProjectDetail() {
       await addPayment(id, selectedTrade.id, {
         amount,
         date: new Date(newPayment.date),
-        type: 'advance',
+        type: newPayment.type,
         designation: newPayment.designation,
+        workerNames: newPayment.type === 'labor_expense' ? newPayment.workerNames : undefined,
         ownerId: user.uid,
       }, receiptFile);
-      await updateTrade(id, selectedTrade.id, { totalAdvances: selectedTrade.totalAdvances + amount });
-      await checkAndSendAlert(selectedTrade, amount);
+
+      // If it's an expense, check for budget alerts
+      if (newPayment.type !== 'client_advance') {
+        await checkAndSendAlert(selectedTrade, amount);
+      }
+
       setAddingPayment(false);
-      setNewPayment({ amount: 0, date: new Date().toISOString().substring(0, 10), designation: '' });
+      setNewPayment({
+        amount: 0,
+        date: new Date().toISOString().substring(0, 10),
+        designation: '',
+        type: 'client_advance',
+        workerNames: ''
+      });
       setReceiptFile(null);
     } catch (err: any) {
       console.error(err);
-      alert('Error recording advance. Details: ' + err.message);
+      alert('Error recording transaction. Details: ' + err.message);
     } finally {
       setIsSavingPayment(false);
     }
   };
+
+  const incomePayments = payments.filter(p => p.type === 'client_advance' || p.type === 'advance' || p.type === 'income');
+  const expensePayments = payments.filter(p => p.type === 'labor_expense' || p.type === 'material_expense' || p.type === 'expense');
 
   return (
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-8 pb-10">
@@ -166,7 +192,7 @@ export default function ProjectDetail() {
       </motion.div>
 
       {/* Stats */}
-      <motion.div variants={container} className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+      <motion.div variants={container} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <motion.div variants={item}>
           <div className="elite-card p-7 relative overflow-hidden group">
             <div className="pb-3 mb-5 relative z-10" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
@@ -175,11 +201,10 @@ export default function ProjectDetail() {
               </h3>
             </div>
             <div className="relative z-10">
-              <div className="text-3xl md:text-4xl font-playfair font-black text-white tracking-tight">
+              <div className="text-3xl font-playfair font-black text-white tracking-tight">
                 € {totalBudget.toLocaleString()}
               </div>
             </div>
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-600 pointer-events-none rounded-xl" style={{ background: 'linear-gradient(135deg, rgba(212,175,55,0.04) 0%, transparent 60%)' }} />
           </div>
         </motion.div>
 
@@ -191,22 +216,10 @@ export default function ProjectDetail() {
               </h3>
             </div>
             <div className="relative z-10">
-              <div className="text-3xl md:text-4xl font-playfair font-black tracking-tight" style={{ color: '#D4AF37', textShadow: '0 0 15px rgba(212,175,55,0.2)' }}>
-                € {totalAdvances.toLocaleString()}
-              </div>
-              <div className="flex items-center gap-4 mt-5">
-                <div className="flex-1 elite-progress-track">
-                  <div
-                    className={totalBudget > 0 && totalAdvances / totalBudget > 0.75 ? 'elite-progress-fill-danger' : 'elite-progress-fill-gold'}
-                    style={{ width: `${Math.min(100, (totalAdvances / (totalBudget || 1)) * 100)}%` }}
-                  />
-                </div>
-                <p className="text-[10px] font-black tracking-widest w-11 text-right" style={{ color: '#D4AF37' }}>
-                  {totalBudget > 0 ? ((totalAdvances / totalBudget) * 100).toFixed(1) : 0}%
-                </p>
+              <div className="text-3xl font-playfair font-black tracking-tight" style={{ color: '#D4AF37' }}>
+                € {totalClientAdvances.toLocaleString()}
               </div>
             </div>
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-600 pointer-events-none rounded-xl" style={{ background: 'linear-gradient(135deg, rgba(52,211,153,0.03) 0%, transparent 60%)' }} />
           </div>
         </motion.div>
 
@@ -214,21 +227,32 @@ export default function ProjectDetail() {
           <div className="elite-card p-7 relative overflow-hidden group">
             <div className="pb-3 mb-5 relative z-10" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
               <h3 className="text-[9px] font-bold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.38)' }}>
-                {t('detail_remaining_card')}
+                {t('detail_expenses_card')}
+              </h3>
+            </div>
+            <div className="relative z-10">
+              <div className="text-3xl font-playfair font-black tracking-tight" style={{ color: '#f87171' }}>
+                € {totalExpenses.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div variants={item}>
+          <div className="elite-card p-7 relative overflow-hidden group">
+            <div className="pb-3 mb-5 relative z-10" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+              <h3 className="text-[9px] font-bold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.38)' }}>
+                {t('detail_balance_card')}
               </h3>
             </div>
             <div className="relative z-10">
               <div
-                className="text-3xl md:text-4xl font-playfair font-black tracking-tight"
-                style={{ color: totalBudget - totalAdvances < 0 ? '#f87171' : '#34d399', textShadow: `0 0 15px ${totalBudget - totalAdvances < 0 ? 'rgba(248,113,113,0.2)' : 'rgba(52,211,153,0.2)'}` }}
+                className="text-3xl font-playfair font-black tracking-tight"
+                style={{ color: projectBalance < 0 ? '#f87171' : '#34d399' }}
               >
-                € {(totalBudget - totalAdvances).toLocaleString()}
+                € {projectBalance.toLocaleString()}
               </div>
-              <p className="text-[10px] font-bold mt-3 uppercase tracking-[0.1em]" style={{ color: 'rgba(255,255,255,0.28)' }}>
-                {t('detail_utilization')}: {totalBudget > 0 ? ((totalAdvances / totalBudget) * 100).toFixed(1) : 0}%
-              </p>
             </div>
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-600 pointer-events-none rounded-xl" style={{ background: 'linear-gradient(135deg, rgba(52,211,153,0.03) 0%, transparent 60%)' }} />
           </div>
         </motion.div>
       </motion.div>
@@ -310,7 +334,11 @@ export default function ProjectDetail() {
           </div>
         ) : (
           trades.map((trade) => {
-            const ratio = trade.amount > 0 ? trade.totalAdvances / trade.amount : 0;
+            const budget = trade.budget || trade.amount || 0;
+            const advances = trade.totalClientAdvances || trade.totalAdvances || 0;
+            const expenses = (trade.totalLaborExpenses || 0) + (trade.totalMaterialExpenses || 0);
+            const balance = advances - expenses;
+            const ratio = budget > 0 ? expenses / budget : 0;
             const isWarning = ratio > 0.75;
             const isSelected = selectedTrade?.id === trade.id;
 
@@ -340,18 +368,22 @@ export default function ProjectDetail() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 rounded-lg p-4" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.03)' }}>
+                <div className="grid grid-cols-2 gap-3 rounded-lg p-4" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.03)' }}>
                   <div>
                     <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{t('detail_th_budget')}</p>
-                    <p className="font-bold text-white text-sm">€ {trade.amount.toLocaleString()}</p>
+                    <p className="font-bold text-white text-sm">€ {budget.toLocaleString()}</p>
                   </div>
                   <div>
                     <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{t('detail_th_advances')}</p>
-                    <p className="font-bold text-sm" style={{ color: '#D4AF37' }}>€ {trade.totalAdvances.toLocaleString()}</p>
+                    <p className="font-bold text-sm" style={{ color: '#D4AF37' }}>€ {advances.toLocaleString()}</p>
                   </div>
                   <div>
-                    <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{t('detail_th_remaining')}</p>
-                    <p className="font-bold text-sm" style={{ color: trade.amount - trade.totalAdvances < 0 ? '#f87171' : '#34d399' }}>€ {(trade.amount - trade.totalAdvances).toLocaleString()}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{t('detail_th_expenses')}</p>
+                    <p className="font-bold text-sm" style={{ color: '#f87171' }}>€ {expenses.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: 'rgba(255,255,255,0.38)' }}>{t('detail_th_balance')}</p>
+                    <p className="font-bold text-sm" style={{ color: balance < 0 ? '#f87171' : '#34d399' }}>€ {balance.toLocaleString()}</p>
                   </div>
                 </div>
 
@@ -373,7 +405,7 @@ export default function ProjectDetail() {
       </div>
 
       {/* Desktop Trades Table */}
-      <motion.div variants={item} className="hidden lg:flex elite-card overflow-hidden flex-col">
+      <motion.div variants={item} className="elite-card overflow-hidden flex-col hidden lg:flex">
         <div className="px-8 py-5" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: 'rgba(0,0,0,0.3)' }}>
           <h3 className="text-[9px] font-bold uppercase tracking-[0.22em]" style={{ color: 'rgba(255,255,255,0.35)' }}>{t('detail_ledger_title')}</h3>
         </div>
@@ -381,10 +413,10 @@ export default function ProjectDetail() {
           <table className="min-w-full text-left border-collapse">
             <thead>
               <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                {[t('detail_th_designation'), t('detail_th_supplier'), t('detail_th_budget'), t('detail_th_advances'), t('detail_th_remaining'), t('detail_th_risk'), t('detail_th_actions')].map((h, i) => (
+                {[t('detail_th_designation'), t('detail_th_budget'), t('detail_th_advances'), t('detail_th_expenses'), t('detail_th_balance'), t('detail_th_risk'), t('detail_th_actions')].map((h, i) => (
                   <th
                     key={h}
-                    className={`px-7 py-5 text-[9px] font-bold uppercase tracking-[0.22em] ${i >= 2 && i <= 4 ? 'text-right' : ''}`}
+                    className={`px-7 py-5 text-[9px] font-bold uppercase tracking-[0.22em] ${i >= 1 && i <= 4 ? 'text-right' : ''}`}
                     style={{ color: '#D4AF37' }}
                   >
                     {h}
@@ -401,10 +433,13 @@ export default function ProjectDetail() {
                 </tr>
               ) : (
                 trades.map((trade) => {
-                  const ratio = trade.amount > 0 ? trade.totalAdvances / trade.amount : 0;
+                  const budget = trade.budget || trade.amount || 0;
+                  const advances = trade.totalClientAdvances || trade.totalAdvances || 0;
+                  const expenses = (trade.totalLaborExpenses || 0) + (trade.totalMaterialExpenses || 0);
+                  const balance = advances - expenses;
+                  const ratio = budget > 0 ? expenses / budget : 0;
                   const isWarning = ratio > 0.75;
                   const isSelected = selectedTrade?.id === trade.id;
-                  const remaining = trade.amount - trade.totalAdvances;
 
                   return (
                     <tr
@@ -412,30 +447,23 @@ export default function ProjectDetail() {
                       className="transition-colors duration-300"
                       style={{
                         borderBottom: '1px solid rgba(255,255,255,0.03)',
-                        background: isSelected
-                          ? 'rgba(212,175,55,0.04)'
-                          : isWarning
-                          ? 'rgba(244,63,94,0.02)'
-                          : 'transparent',
+                        background: isSelected ? 'rgba(212,175,55,0.04)' : 'transparent',
                       }}
-                      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.015)'; }}
-                      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = isWarning ? 'rgba(244,63,94,0.02)' : 'transparent'; }}
                     >
                       <td className="px-7 py-5 whitespace-nowrap font-playfair font-black text-[1.05rem] text-white uppercase tracking-[0.04em]">
-                        {isWarning && <AlertCircle size={12} className="inline mr-2 mb-0.5" style={{ color: '#f87171' }} />}
                         {trade.designation}
                       </td>
-                      <td className="px-7 py-5 whitespace-nowrap text-[10px] font-bold tracking-[0.2em] uppercase" style={{ color: 'rgba(255,255,255,0.38)' }}>
-                        {trade.supplierName || '—'}
-                      </td>
                       <td className="px-7 py-5 whitespace-nowrap text-sm font-bold text-white text-right">
-                        € {trade.amount.toLocaleString()}
+                        € {budget.toLocaleString()}
                       </td>
                       <td className="px-7 py-5 whitespace-nowrap text-sm font-bold text-right" style={{ color: '#D4AF37' }}>
-                        € {trade.totalAdvances.toLocaleString()}
+                        € {advances.toLocaleString()}
                       </td>
-                      <td className="px-7 py-5 whitespace-nowrap text-sm font-bold text-right" style={{ color: remaining < 0 ? '#f87171' : '#34d399' }}>
-                        € {remaining.toLocaleString()}
+                      <td className="px-7 py-5 whitespace-nowrap text-sm font-bold text-right" style={{ color: '#f87171' }}>
+                        € {expenses.toLocaleString()}
+                      </td>
+                      <td className="px-7 py-5 whitespace-nowrap text-sm font-bold text-right" style={{ color: balance < 0 ? '#f87171' : '#34d399' }}>
+                        € {balance.toLocaleString()}
                       </td>
                       <td className="px-7 py-5 whitespace-nowrap">
                         <div className="flex items-center gap-3">
@@ -454,11 +482,9 @@ export default function ProjectDetail() {
                         <button
                           className="px-5 py-2 text-[9px] uppercase tracking-[0.1em] font-bold transition-all duration-200 rounded-lg"
                           style={isSelected
-                            ? { background: '#D4AF37', color: '#000', border: '1px solid #D4AF37', boxShadow: '0 0 15px rgba(212,175,55,0.35)' }
+                            ? { background: '#D4AF37', color: '#000', border: '1px solid #D4AF37' }
                             : { background: 'transparent', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)' }
                           }
-                          onMouseEnter={(e) => { if (!isSelected) { e.currentTarget.style.color = 'white'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)'; } }}
-                          onMouseLeave={(e) => { if (!isSelected) { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; } }}
                           onClick={() => setSelectedTrade(isSelected ? null : trade)}
                         >
                           {isSelected ? t('detail_close') : t('detail_manage')}
@@ -475,16 +501,11 @@ export default function ProjectDetail() {
 
       {/* Payment Panel */}
       {selectedTrade && (
-        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}>
+        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <div
             className="elite-card relative overflow-hidden"
-            style={{ border: '1px solid rgba(212,175,55,0.25)', boxShadow: '0 0 40px rgba(212,175,55,0.08)' }}
+            style={{ border: '1px solid rgba(212,175,55,0.25)' }}
           >
-            <div
-              className="absolute top-0 left-0 w-[500px] h-[500px] rounded-full pointer-events-none"
-              style={{ background: 'rgba(212,175,55,0.04)', filter: 'blur(120px)' }}
-            />
-
             {/* Panel header */}
             <div
               className="px-7 md:px-10 py-7 relative z-10"
@@ -510,11 +531,9 @@ export default function ProjectDetail() {
                 <button
                   onClick={() => setAddingPayment(!addingPayment)}
                   className="flex items-center gap-2.5 px-7 py-3.5 font-bold text-[10px] uppercase tracking-[0.12em] rounded-xl transition-all duration-200"
-                  style={{ background: 'white', color: '#000', boxShadow: '0 0 20px rgba(255,255,255,0.15)' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.9)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'white'; }}
+                  style={{ background: 'white', color: '#000' }}
                 >
-                  <Plus size={14} /> {t('detail_record_advance')}
+                  <Plus size={14} /> {t('detail_record_payment')}
                 </button>
               </div>
             </div>
@@ -526,7 +545,7 @@ export default function ProjectDetail() {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   onSubmit={handleAddPayment}
-                  className="grid grid-cols-1 md:grid-cols-3 gap-7 mb-10 p-7 rounded-xl"
+                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-7 mb-10 p-7 rounded-xl"
                   style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.4)' }}
                 >
                   <div>
@@ -538,18 +557,41 @@ export default function ProjectDetail() {
                   </div>
                   <div>
                     <label className="block text-[9px] font-bold uppercase tracking-[0.22em] mb-2.5" style={{ color: 'rgba(255,255,255,0.38)' }}>
+                      {t('detail_field_type')}
+                    </label>
+                    <select
+                      className="elite-input"
+                      value={newPayment.type}
+                      onChange={(e) => setNewPayment({ ...newPayment, type: e.target.value as PaymentType })}
+                    >
+                      <option value="client_advance">{t('detail_advance_label')}</option>
+                      <option value="labor_expense">{t('detail_expense_labor_label')}</option>
+                      <option value="material_expense">{t('detail_expense_material_label')}</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold uppercase tracking-[0.22em] mb-2.5" style={{ color: 'rgba(255,255,255,0.38)' }}>
                       {t('detail_field_amount')}
                     </label>
                     <input type="number" required placeholder="0" className="elite-input"
                       value={newPayment.amount || ''} onChange={(e) => setNewPayment({ ...newPayment, amount: Number(e.target.value) })} />
                   </div>
-                  <div>
+                  <div className={newPayment.type === 'labor_expense' ? 'md:col-span-1' : 'md:col-span-2'}>
                     <label className="block text-[9px] font-bold uppercase tracking-[0.22em] mb-2.5" style={{ color: 'rgba(255,255,255,0.38)' }}>
                       {t('detail_field_ref')}
                     </label>
                     <input placeholder="e.g. Invoice #123" className="elite-input"
                       value={newPayment.designation} onChange={(e) => setNewPayment({ ...newPayment, designation: e.target.value })} />
                   </div>
+                  {newPayment.type === 'labor_expense' && (
+                    <div className="md:col-span-1">
+                      <label className="block text-[9px] font-bold uppercase tracking-[0.22em] mb-2.5" style={{ color: 'rgba(255,255,255,0.38)' }}>
+                        {t('detail_field_workers')}
+                      </label>
+                      <input placeholder="e.g. Jean, Marc" className="elite-input"
+                        value={newPayment.workerNames} onChange={(e) => setNewPayment({ ...newPayment, workerNames: e.target.value })} />
+                    </div>
+                  )}
                   <div className="md:col-span-3">
                     <label className="block text-[9px] font-bold uppercase tracking-[0.22em] mb-3" style={{ color: 'rgba(255,255,255,0.38)' }}>
                       {t('detail_field_receipt')}
@@ -560,17 +602,15 @@ export default function ProjectDetail() {
                     <button
                       type="submit"
                       disabled={isSavingPayment}
-                      className="flex items-center gap-2.5 px-9 py-3.5 font-bold text-[10px] uppercase tracking-[0.12em] rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      style={{ background: 'white', color: '#000', boxShadow: '0 0 16px rgba(255,255,255,0.12)' }}
+                      className="flex items-center gap-2.5 px-9 py-3.5 font-bold text-[10px] uppercase tracking-[0.12em] rounded-xl transition-all duration-200"
+                      style={{ background: 'white', color: '#000' }}
                     >
                       {isSavingPayment ? t('detail_processing') : t('detail_confirm')}
                     </button>
                     <button
                       type="button"
                       onClick={() => { setAddingPayment(false); setReceiptFile(null); }}
-                      disabled={isSavingPayment}
-                      className="text-[10px] uppercase tracking-[0.1em] transition-colors hover:text-white"
-                      style={{ color: 'rgba(255,255,255,0.35)' }}
+                      className="text-[10px] uppercase tracking-[0.1em] style={{ color: 'rgba(255,255,255,0.35)' }}"
                     >
                       {t('detail_trade_cancel')}
                     </button>
@@ -578,63 +618,42 @@ export default function ProjectDetail() {
                 </motion.form>
               )}
 
-              {/* Payment List */}
-              <div className="space-y-4">
-                {payments.length === 0 ? (
-                  <p
-                    className="text-[10px] font-bold uppercase tracking-[0.22em] text-center py-14 rounded-xl"
-                    style={{ color: 'rgba(255,255,255,0.3)', border: '1px dashed rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.2)' }}
-                  >
-                    {t('detail_no_payments')}
-                  </p>
-                ) : (
-                  payments.map((payment) => (
-                    <div
-                      key={payment.id}
-                      className="flex flex-col p-6 rounded-xl transition-colors duration-200"
-                      style={{ border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.01)'; }}
-                    >
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
-                        <div className="flex items-center gap-5">
-                          <div
-                            className="h-11 w-11 rounded-xl bg-black flex items-center justify-center shrink-0"
-                            style={{ border: '1px solid rgba(255,255,255,0.08)', color: '#D4AF37' }}
-                          >
-                            <Wallet size={18} />
-                          </div>
-                          <div>
-                            <p className="text-[1rem] font-playfair font-black text-white uppercase tracking-[0.04em]">
-                              {t('detail_advance_label')}
-                            </p>
-                            <p className="text-[9px] font-bold uppercase tracking-[0.2em] mt-1.5" style={{ color: '#D4AF37' }}>
-                              {format(payment.date, 'MMM d, yyyy')}
-                              {payment.designation && <span style={{ color: 'rgba(255,255,255,0.4)' }}> · {payment.designation}</span>}
-                            </p>
-                          </div>
-                        </div>
-                        <span className="font-playfair font-black text-2xl text-white tracking-tight">
-                          € {payment.amount.toLocaleString()}
-                        </span>
-                      </div>
-                      {payment.receiptUrl && (
-                        <button
-                          className="mt-5 w-44 h-44 rounded-xl overflow-hidden group relative text-left"
-                          style={{ border: '1px solid rgba(255,255,255,0.1)' }}
-                          onClick={() => setLightboxSrc(payment.receiptUrl!)}
-                        >
-                          <LazyImage src={payment.receiptUrl} alt={t('img_receipt')} className="w-full h-full" />
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-colors duration-200">
-                            <span className="opacity-0 group-hover:opacity-100 text-[9px] font-bold uppercase tracking-[0.2em] text-white transition-opacity duration-200">
-                              {t('img_tap_zoom')}
-                            </span>
-                          </div>
-                        </button>
-                      )}
-                    </div>
-                  ))
-                )}
+              {/* Income Section */}
+              <div className="mb-10">
+                <h3 className="text-[10px] font-black uppercase tracking-[0.25em] mb-6 flex items-center gap-3" style={{ color: '#D4AF37' }}>
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#D4AF37]" />
+                  {t('detail_income_section')}
+                </h3>
+                <div className="space-y-4">
+                  {incomePayments.length === 0 ? (
+                    <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-center py-8 rounded-xl" style={{ color: 'rgba(255,255,255,0.2)', border: '1px dashed rgba(255,255,255,0.05)' }}>
+                      {t('detail_no_payments')}
+                    </p>
+                  ) : (
+                    incomePayments.map((payment) => (
+                      <PaymentCard key={payment.id} payment={payment} t={t} onImageClick={setLightboxSrc} />
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Expense Section */}
+              <div>
+                <h3 className="text-[10px] font-black uppercase tracking-[0.25em] mb-6 flex items-center gap-3" style={{ color: '#f87171' }}>
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#f87171]" />
+                  {t('detail_expense_section')}
+                </h3>
+                <div className="space-y-4">
+                  {expensePayments.length === 0 ? (
+                    <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-center py-8 rounded-xl" style={{ color: 'rgba(255,255,255,0.2)', border: '1px dashed rgba(255,255,255,0.05)' }}>
+                      {t('detail_no_payments')}
+                    </p>
+                  ) : (
+                    expensePayments.map((payment) => (
+                      <PaymentCard key={payment.id} payment={payment} t={t} onImageClick={setLightboxSrc} />
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -643,5 +662,52 @@ export default function ProjectDetail() {
 
       <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </motion.div>
+  );
+}
+
+function PaymentCard({ payment, t, onImageClick }: { payment: Payment, t: any, onImageClick: (src: string) => void }) {
+  const isIncome = payment.type === 'client_advance' || payment.type === 'advance' || payment.type === 'income';
+  const typeLabel = payment.type === 'labor_expense' ? t('detail_expense_labor_label') :
+                   payment.type === 'material_expense' || payment.type === 'expense' ? t('detail_expense_material_label') :
+                   t('detail_advance_label');
+
+  return (
+    <div
+      className="flex flex-col p-6 rounded-xl transition-colors duration-200"
+      style={{ border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)' }}
+    >
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+        <div className="flex items-center gap-5">
+          <div
+            className="h-11 w-11 rounded-xl bg-black flex items-center justify-center shrink-0"
+            style={{ border: '1px solid rgba(255,255,255,0.08)', color: isIncome ? '#D4AF37' : '#f87171' }}
+          >
+            {payment.type === 'labor_expense' ? <User size={18} /> : <Wallet size={18} />}
+          </div>
+          <div>
+            <p className="text-[1rem] font-playfair font-black text-white uppercase tracking-[0.04em]">
+              {typeLabel}
+            </p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] mt-1.5" style={{ color: isIncome ? '#D4AF37' : '#f87171' }}>
+              {format(payment.date, 'MMM d, yyyy')}
+              {payment.designation && <span style={{ color: 'rgba(255,255,255,0.4)' }}> · {payment.designation}</span>}
+              {payment.workerNames && <span style={{ color: 'rgba(255,255,255,0.4)' }}> · Workers: {payment.workerNames}</span>}
+            </p>
+          </div>
+        </div>
+        <span className="font-playfair font-black text-2xl text-white tracking-tight">
+          € {payment.amount.toLocaleString()}
+        </span>
+      </div>
+      {payment.receiptUrl && (
+        <button
+          className="mt-5 w-32 h-32 rounded-xl overflow-hidden group relative text-left"
+          style={{ border: '1px solid rgba(255,255,255,0.1)' }}
+          onClick={() => onImageClick(payment.receiptUrl!)}
+        >
+          <LazyImage src={payment.receiptUrl} alt={t('img_receipt')} className="w-full h-full" />
+        </button>
+      )}
+    </div>
   );
 }

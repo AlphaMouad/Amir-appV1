@@ -15,12 +15,20 @@ export interface Trade {
   designation: string;
   supplierName?: string;
   quantity?: number;
+  /** @deprecated use budget */
   amount: number;
+  budget: number;
+  /** @deprecated use totalClientAdvances */
   totalAdvances: number;
+  totalClientAdvances: number;
+  totalLaborExpenses: number;
+  totalMaterialExpenses: number;
   createdAt: Date;
   updatedAt: Date;
   ownerId: string;
 }
+
+export type PaymentType = 'client_advance' | 'labor_expense' | 'material_expense' | 'advance' | 'expense' | 'income';
 
 export interface Payment {
   id: string;
@@ -28,8 +36,9 @@ export interface Payment {
   tradeId: string;
   date: Date;
   amount: number;
-  type: 'advance' | 'expense' | 'income';
+  type: PaymentType;
   designation?: string;
+  workerNames?: string;
   receiptUrl?: string;
   createdAt: Date;
   ownerId: string;

@@ -1,4 +1,4 @@
-import { collection, doc, query, where, getDocs, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, onSnapshot, getDocFromServer, collectionGroup } from 'firebase/firestore';
+import { collection, doc, query, where, getDocs, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, onSnapshot, getDocFromServer, collectionGroup, increment } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from './errorHandler';
 import { Project, Trade, Payment } from '../types';
@@ -68,12 +68,22 @@ export const deleteProject = async (id: string) => {
 export const getTrades = (projectId: string, userId: string, callback: (trades: Trade[]) => void, errorCallback: (error: any) => void) => {
   const q = query(collection(db, `projects/${projectId}/trades`), where('ownerId', '==', userId), orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
-    const trades: Trade[] = snapshot.docs.map(doc => ({
-      ...(doc.data() as any),
-      id: doc.id,
-      createdAt: doc.data().createdAt?.toDate(),
-      updatedAt: doc.data().updatedAt?.toDate()
-    }));
+    const trades: Trade[] = snapshot.docs.map(doc => {
+      const data = doc.data() as any;
+      return {
+        ...data,
+        id: doc.id,
+        // Fallbacks for backward compatibility
+        budget: data.budget ?? data.amount ?? 0,
+        amount: data.budget ?? data.amount ?? 0,
+        totalClientAdvances: data.totalClientAdvances ?? data.totalAdvances ?? 0,
+        totalAdvances: data.totalClientAdvances ?? data.totalAdvances ?? 0,
+        totalLaborExpenses: data.totalLaborExpenses ?? 0,
+        totalMaterialExpenses: data.totalMaterialExpenses ?? 0,
+        createdAt: data.createdAt?.toDate(),
+        updatedAt: data.updatedAt?.toDate()
+      };
+    });
     callback(trades);
   }, (error) => {
     handleFirestoreError(error, OperationType.LIST, `projects/${projectId}/trades`);
@@ -84,12 +94,21 @@ export const getTrades = (projectId: string, userId: string, callback: (trades: 
 export const getAllTrades = (userId: string, callback: (trades: Trade[]) => void, errorCallback: (error: any) => void) => {
   const q = query(collectionGroup(db, 'trades'), where('ownerId', '==', userId));
   return onSnapshot(q, (snapshot) => {
-    const trades: Trade[] = snapshot.docs.map(doc => ({
-      ...(doc.data() as any),
-      id: doc.id,
-      createdAt: doc.data().createdAt?.toDate(),
-      updatedAt: doc.data().updatedAt?.toDate()
-    }));
+    const trades: Trade[] = snapshot.docs.map(doc => {
+      const data = doc.data() as any;
+      return {
+        ...data,
+        id: doc.id,
+        budget: data.budget ?? data.amount ?? 0,
+        amount: data.budget ?? data.amount ?? 0,
+        totalClientAdvances: data.totalClientAdvances ?? data.totalAdvances ?? 0,
+        totalAdvances: data.totalClientAdvances ?? data.totalAdvances ?? 0,
+        totalLaborExpenses: data.totalLaborExpenses ?? 0,
+        totalMaterialExpenses: data.totalMaterialExpenses ?? 0,
+        createdAt: data.createdAt?.toDate(),
+        updatedAt: data.updatedAt?.toDate()
+      };
+    });
     callback(trades);
   }, (error) => {
     handleFirestoreError(error, OperationType.LIST, `trades group`);
@@ -104,6 +123,12 @@ export const addTrade = async (projectId: string, data: Omit<Trade, 'id' | 'proj
     await setDoc(docRef, {
       ...data,
       projectId,
+      budget: data.budget ?? data.amount,
+      amount: data.budget ?? data.amount,
+      totalClientAdvances: 0,
+      totalAdvances: 0,
+      totalLaborExpenses: 0,
+      totalMaterialExpenses: 0,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -116,8 +141,12 @@ export const addTrade = async (projectId: string, data: Omit<Trade, 'id' | 'proj
 
 export const updateTrade = async (projectId: string, tradeId: string, data: Partial<Omit<Trade, 'id' | 'projectId' | 'createdAt' | 'ownerId'>>) => {
   try {
+    const updateData: any = { ...data };
+    if (data.budget !== undefined) updateData.amount = data.budget;
+    if (data.totalClientAdvances !== undefined) updateData.totalAdvances = data.totalClientAdvances;
+
     await updateDoc(doc(db, `projects/${projectId}/trades`, tradeId), {
-      ...data,
+      ...updateData,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
@@ -127,7 +156,7 @@ export const updateTrade = async (projectId: string, tradeId: string, data: Part
 };
 
 export const getPayments = (projectId: string, tradeId: string, userId: string, callback: (payments: Payment[]) => void, errorCallback: (error: any) => void) => {
-  const q = query(collection(db, `projects/${projectId}/trades/${tradeId}/payments`), where('ownerId', '==', userId), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, `projects/${projectId}/trades/${tradeId}/payments`), where('ownerId', '==', userId), orderBy('date', 'desc'));
   return onSnapshot(q, (snapshot) => {
     const payments: Payment[] = snapshot.docs.map(doc => ({
       ...(doc.data() as any),
@@ -175,10 +204,29 @@ export const addPayment = async (projectId: string, tradeId: string, data: Omit<
       ...(receiptUrl ? { receiptUrl } : {}),
       createdAt: serverTimestamp()
     });
+
+    // Update trade totals
+    const tradeRef = doc(db, `projects/${projectId}/trades`, tradeId);
+    const updates: any = {};
+    if (data.type === 'client_advance' || data.type === 'advance' || data.type === 'income') {
+      updates.totalClientAdvances = increment(data.amount);
+      updates.totalAdvances = increment(data.amount);
+    } else if (data.type === 'labor_expense') {
+      updates.totalLaborExpenses = increment(data.amount);
+    } else if (data.type === 'material_expense' || data.type === 'expense') {
+      updates.totalMaterialExpenses = increment(data.amount);
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await updateDoc(tradeRef, {
+        ...updates,
+        updatedAt: serverTimestamp()
+      });
+    }
+
     return docRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `projects/${projectId}/trades/${tradeId}/payments`);
     throw error;
   }
 };
-

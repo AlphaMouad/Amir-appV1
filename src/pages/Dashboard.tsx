@@ -67,17 +67,23 @@ export default function Dashboard() {
 
   const totalProjects = projects.length;
   const activeProjects = projects.filter((p) => p.status === 'ongoing').length;
-  const totalBudget = trades.reduce((sum, t) => sum + t.amount, 0);
-  const totalAdvances = trades.reduce((sum, t) => sum + t.totalAdvances, 0);
-  const tradesWithWarnings = trades.filter((t) => t.amount > 0 && t.totalAdvances / t.amount > 0.75);
-  const utilizationPct = totalBudget > 0 ? Math.round((totalAdvances / totalBudget) * 100) : 0;
+  const globalBudget = trades.reduce((sum, t) => sum + (t.budget || t.amount || 0), 0);
+  const globalAdvances = trades.reduce((sum, t) => sum + (t.totalClientAdvances || t.totalAdvances || 0), 0);
+  const globalExpenses = trades.reduce((sum, t) => sum + (t.totalLaborExpenses || 0) + (t.totalMaterialExpenses || 0), 0);
+  const globalBalance = globalAdvances - globalExpenses;
+
+  const tradesWithWarnings = trades.filter((t) => {
+    const budget = t.budget || t.amount || 0;
+    const expenses = (t.totalLaborExpenses || 0) + (t.totalMaterialExpenses || 0);
+    return budget > 0 && expenses > budget;
+  });
 
   const projectChartData = projects.map((p) => {
-    const projectTrades = trades.filter((t) => t.projectId === p.id);
+    const pTrades = trades.filter((t) => t.projectId === p.id);
     return {
       name: p.name.length > 12 ? p.name.substring(0, 12) + '…' : p.name,
-      Budget: projectTrades.reduce((sum, t) => sum + t.amount, 0),
-      Advances: projectTrades.reduce((sum, t) => sum + t.totalAdvances, 0),
+      Advances: pTrades.reduce((sum, t) => sum + (t.totalClientAdvances || t.totalAdvances || 0), 0),
+      Expenses: pTrades.reduce((sum, t) => sum + (t.totalLaborExpenses || 0) + (t.totalMaterialExpenses || 0), 0),
     };
   });
 
@@ -88,33 +94,28 @@ export default function Dashboard() {
       sub: `${activeProjects} ${t('dash_kpi_active')}`,
       subColor: '#D4AF37',
       icon: <Building size={16} style={{ color: '#D4AF37' }} />,
-      accentHover: 'rgba(212,175,55,0.28)',
-    },
-    {
-      label: t('dash_kpi_budget'),
-      value: `€${totalBudget.toLocaleString()}`,
-      sub: t('dash_kpi_allocated'),
-      subColor: '#34d399',
-      icon: <DollarSign size={16} style={{ color: '#34d399' }} />,
-      accentHover: 'rgba(52,211,153,0.28)',
     },
     {
       label: t('dash_kpi_advances'),
-      value: `€${totalAdvances.toLocaleString()}`,
-      sub: `€${(totalBudget - totalAdvances).toLocaleString()} ${t('dash_kpi_remaining')}`,
-      subColor: 'rgba(255,255,255,0.35)',
-      icon: <TrendingUp size={16} style={{ color: 'rgba(255,255,255,0.5)' }} />,
-      progress: utilizationPct,
-      accentHover: 'rgba(255,255,255,0.15)',
+      value: `€${globalAdvances.toLocaleString()}`,
+      sub: t('dash_kpi_allocated'),
+      subColor: '#D4AF37',
+      icon: <DollarSign size={16} style={{ color: '#D4AF37' }} />,
     },
     {
-      label: t('dash_kpi_risk'),
-      value: tradesWithWarnings.length,
-      sub: tradesWithWarnings.length === 0 ? t('dash_kpi_no_risk') : t('dash_kpi_risk_sub'),
-      subColor: tradesWithWarnings.length === 0 ? '#34d399' : '#f87171',
-      icon: <AlertCircle size={16} style={{ color: tradesWithWarnings.length > 0 ? '#f87171' : '#34d399' }} />,
-      valueColor: tradesWithWarnings.length > 0 ? '#f87171' : '#34d399',
-      accentHover: 'rgba(248,113,113,0.25)',
+      label: t('dash_kpi_expenses'),
+      value: `€${globalExpenses.toLocaleString()}`,
+      sub: `€${globalBudget.toLocaleString()} ${t('dash_kpi_budget')}`,
+      subColor: '#f87171',
+      icon: <TrendingUp size={16} style={{ color: '#f87171' }} />,
+    },
+    {
+      label: t('dash_kpi_balance'),
+      value: `€${globalBalance.toLocaleString()}`,
+      sub: tradesWithWarnings.length === 0 ? t('dash_kpi_no_risk') : `${tradesWithWarnings.length} ${t('dash_kpi_risk')}`,
+      subColor: globalBalance < 0 ? '#f87171' : '#34d399',
+      icon: <AlertCircle size={16} style={{ color: globalBalance < 0 ? '#f87171' : '#34d399' }} />,
+      valueColor: globalBalance < 0 ? '#f87171' : '#34d399',
     },
   ];
 
@@ -129,14 +130,6 @@ export default function Dashboard() {
             {t('dash_welcome')}, {user?.displayName?.split(' ')[0] || 'User'}. {t('dash_summary')}
           </p>
         </div>
-        <div
-          className="px-5 py-2 rounded-lg"
-          style={{ background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)' }}
-        >
-          <span className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: 'rgba(255,255,255,0.4)' }}>
-            {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-          </span>
-        </div>
       </motion.div>
 
       {/* KPI Cards */}
@@ -144,45 +137,21 @@ export default function Dashboard() {
         {kpiCards.map((card, i) => (
           <motion.div variants={item} key={i}>
             <Card className="elite-card group h-full">
-              <CardHeader
-                className="flex flex-row items-center justify-between space-y-0 pb-3 relative z-10 mb-3"
-                style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '16px 16px 10px' }}
-              >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 mb-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '16px 16px 10px' }}>
                 <CardTitle className="text-[8px] font-bold uppercase tracking-[0.2em] leading-tight" style={{ color: 'rgba(255,255,255,0.38)' }}>
                   {card.label}
                 </CardTitle>
-                <div
-                  className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-black flex items-center justify-center shrink-0"
-                  style={{ border: '1px solid rgba(255,255,255,0.06)' }}
-                >
+                <div className="w-8 h-8 rounded-lg bg-black flex items-center justify-center shrink-0" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
                   {card.icon}
                 </div>
               </CardHeader>
-              <CardContent className="relative z-10" style={{ padding: '0 16px 16px' }}>
-                <div
-                  className="text-2xl md:text-3xl lg:text-4xl font-playfair font-black tracking-tight leading-none"
-                  style={{ color: card.valueColor || 'white' }}
-                >
+              <CardContent style={{ padding: '0 16px 16px' }}>
+                <div className="text-2xl md:text-3xl font-playfair font-black tracking-tight" style={{ color: card.valueColor || 'white' }}>
                   {card.value}
                 </div>
-                {card.sub && (
-                  <p className="text-[9px] font-bold tracking-wide mt-2 uppercase leading-tight" style={{ color: card.subColor || 'rgba(255,255,255,0.4)' }}>
-                    {card.sub}
-                  </p>
-                )}
-                {card.progress !== undefined && (
-                  <div className="mt-3">
-                    <div className="elite-progress-track">
-                      <div
-                        className={card.progress > 75 ? 'elite-progress-fill-danger' : 'elite-progress-fill-gold'}
-                        style={{ width: `${Math.min(100, card.progress)}%` }}
-                      />
-                    </div>
-                    <p className="text-[10px] font-black mt-1.5 tracking-widest" style={{ color: card.progress > 75 ? '#f87171' : '#D4AF37' }}>
-                      {card.progress}%
-                    </p>
-                  </div>
-                )}
+                <p className="text-[9px] font-bold tracking-wide mt-2 uppercase" style={{ color: card.subColor || 'rgba(255,255,255,0.4)' }}>
+                  {card.sub}
+                </p>
               </CardContent>
             </Card>
           </motion.div>
@@ -202,62 +171,19 @@ export default function Dashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent className="chart-responsive" style={{ padding: '20px 8px 8px' }}>
-              {projectChartData.length === 0 ? (
-                <div className="h-full flex items-center justify-center">
-                  <p className="text-[10px] uppercase tracking-[0.2em] font-bold" style={{ color: 'rgba(255,255,255,0.2)' }}>
-                    {t('dash_no_data')}
-                  </p>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={projectChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }} barGap={3}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.025)" />
-                    <XAxis
-                      dataKey="name"
-                      fontSize={9}
-                      tickLine={false}
-                      axisLine={false}
-                      tick={{ fill: 'rgba(255,255,255,0.35)', fontFamily: 'Montserrat', fontWeight: 600 }}
-                      dy={14}
-                    />
-                    <YAxis
-                      fontSize={9}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(v) => `€${v / 1000}k`}
-                      tick={{ fill: 'rgba(255,255,255,0.35)', fontFamily: 'Montserrat', fontWeight: 600 }}
-                    />
-                    <Tooltip
-                      cursor={{ fill: 'rgba(255,255,255,0.015)' }}
-                      contentStyle={{
-                        backgroundColor: 'rgba(5,5,5,0.96)',
-                        backdropFilter: 'blur(20px)',
-                        borderRadius: '10px',
-                        border: '1px solid rgba(255,255,255,0.07)',
-                        padding: '10px 14px',
-                        color: 'white',
-                        fontSize: '10px',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.1em',
-                        fontFamily: 'Montserrat',
-                      }}
-                      labelStyle={{ color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}
-                    />
-                    <defs>
-                      <linearGradient id="gradBudget" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#3a3a3a" />
-                        <stop offset="100%" stopColor="#181818" />
-                      </linearGradient>
-                      <linearGradient id="gradAdvances" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#D4AF37" />
-                        <stop offset="100%" stopColor="#8C6D1F" />
-                      </linearGradient>
-                    </defs>
-                    <Bar dataKey="Budget" fill="url(#gradBudget)" radius={[3, 3, 0, 0]} maxBarSize={22} />
-                    <Bar dataKey="Advances" fill="url(#gradAdvances)" radius={[3, 3, 0, 0]} maxBarSize={22} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={projectChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }} barGap={3}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.025)" />
+                  <XAxis dataKey="name" fontSize={9} tickLine={false} axisLine={false} tick={{ fill: 'rgba(255,255,255,0.35)' }} dy={14} />
+                  <YAxis fontSize={9} tickLine={false} axisLine={false} tickFormatter={(v) => `€${v / 1000}k`} tick={{ fill: 'rgba(255,255,255,0.35)' }} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(255,255,255,0.015)' }}
+                    contentStyle={{ backgroundColor: 'rgba(5,5,5,0.96)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.07)', fontSize: '10px' }}
+                  />
+                  <Bar dataKey="Advances" fill="#D4AF37" radius={[3, 3, 0, 0]} maxBarSize={22} />
+                  <Bar dataKey="Expenses" fill="#f87171" radius={[3, 3, 0, 0]} maxBarSize={22} />
+                </BarChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
         </motion.div>
@@ -272,52 +198,21 @@ export default function Dashboard() {
                 {t('dash_ledger_sub')}
               </CardDescription>
             </CardHeader>
-            <CardContent style={{ padding: '20px 20px' }}>
+            <CardContent style={{ padding: '20px' }}>
               {tradesWithWarnings.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-14 text-center">
-                  <div
-                    className="w-14 h-14 rounded-full flex items-center justify-center mb-5"
-                    style={{ background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.08)' }}
-                  >
-                    <Building size={22} style={{ color: 'rgba(52,211,153,0.55)' }} />
-                  </div>
                   <p className="text-sm font-playfair tracking-[0.2em] text-white uppercase">{t('dash_ledger_clear')}</p>
-                  <p className="text-[9px] mt-2 uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                    {t('dash_ledger_clear_sub')}
-                  </p>
                 </div>
               ) : (
-                <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
-                  {tradesWithWarnings.map((trade) => {
-                    const project = projects.find((p) => p.id === trade.projectId);
-                    const percentage = Math.round((trade.totalAdvances / trade.amount) * 100);
-                    return (
-                      <div
-                        key={trade.id}
-                        className="flex flex-col p-4 rounded-lg relative overflow-hidden"
-                        style={{ background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.04)', borderLeft: '2px solid #f43f5e' }}
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
-                            <p className="text-[11px] font-bold text-white uppercase tracking-wider">{trade.designation}</p>
-                            <p className="text-[9px] uppercase tracking-[0.2em] mt-1" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                              {project?.name || 'Unknown'}
-                            </p>
-                          </div>
-                          <AlertCircle size={14} style={{ color: '#f87171', opacity: 0.8 }} />
-                        </div>
-                        <div className="elite-progress-track mb-2">
-                          <div className="elite-progress-fill-danger" style={{ width: `${Math.min(100, percentage)}%` }} />
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-black tracking-widest" style={{ color: '#f87171' }}>{percentage}%</span>
-                          <span className="text-[9px] font-medium tracking-widest" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                            €{trade.totalAdvances.toLocaleString()} / €{trade.amount.toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="space-y-3">
+                  {tradesWithWarnings.map((trade) => (
+                    <div key={trade.id} className="p-4 rounded-lg bg-black/50 border border-white/5 border-l-[#f87171] border-l-2">
+                      <p className="text-[11px] font-bold text-white uppercase">{trade.designation}</p>
+                      <p className="text-[9px] uppercase tracking-widest mt-1 text-white/30">
+                        Exp: €{((trade.totalLaborExpenses || 0) + (trade.totalMaterialExpenses || 0)).toLocaleString()} / Budget: €{(trade.budget || trade.amount || 0).toLocaleString()}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>
