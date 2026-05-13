@@ -1,0 +1,104 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if false; }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'clientName', 'status', 'createdAt', 'updatedAt', 'ownerId'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.clientName is string && data.clientName.size() <= 100
+        && (data.contractorName == null || (data.contractorName is string && data.contractorName.size() <= 100))
+        && data.status in ['ongoing', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.ownerId == request.auth.uid;
+    }
+
+    function isValidTrade(data) {
+      return data.keys().hasAll(['projectId', 'designation', 'amount', 'totalAdvances', 'createdAt', 'updatedAt', 'ownerId'])
+        && data.projectId is string && data.projectId.size() <= 128
+        && data.designation is string && data.designation.size() > 0 && data.designation.size() <= 100
+        && (data.supplierName == null || (data.supplierName is string && data.supplierName.size() <= 100))
+        && (data.quantity == null || data.quantity is number)
+        && data.amount is number
+        && data.totalAdvances is number
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.ownerId == request.auth.uid;
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['projectId', 'tradeId', 'date', 'amount', 'type', 'createdAt', 'ownerId'])
+        && data.projectId is string && data.projectId.size() <= 128
+        && data.tradeId is string && data.tradeId.size() <= 128
+        && data.date is timestamp
+        && data.amount is number
+        && data.type in ['advance', 'expense', 'income']
+        && (data.designation == null || (data.designation is string && data.designation.size() <= 100))
+        && data.createdAt is timestamp
+        && data.ownerId == request.auth.uid;
+    }
+
+    match /projects/{projectId} {
+      allow read: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isValidId(projectId) && isValidProject(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if (
+        isSignedIn() && isValidProject(incoming()) && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'clientName', 'contractorName', 'status', 'updatedAt'])
+        ) && incoming().updatedAt == request.time
+          && incoming().createdAt == existing().createdAt
+          && incoming().ownerId == existing().ownerId
+      );
+      
+      allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+      
+      match /trades/{tradeId} {
+        allow read: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+        
+        allow create: if isSignedIn() && isValidId(tradeId) && isValidTrade(incoming())
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid
+          && incoming().projectId == projectId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+          
+        allow update: if (
+          isSignedIn() && isValidTrade(incoming()) && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['designation', 'supplierName', 'quantity', 'amount', 'totalAdvances', 'updatedAt'])
+          ) && incoming().updatedAt == request.time
+            && incoming().createdAt == existing().createdAt
+            && incoming().ownerId == existing().ownerId
+            && incoming().projectId == existing().projectId
+        );
+        
+        allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+        
+        match /payments/{paymentId} {
+          allow read: if isSignedIn() && existing().ownerId == request.auth.uid;
+          allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+          
+          allow create: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming())
+            && get(/databases/$(database)/documents/projects/$(projectId)/trades/$(tradeId)).data.ownerId == request.auth.uid
+            && incoming().projectId == projectId
+            && incoming().tradeId == tradeId
+            && incoming().createdAt == request.time;
+            
+          allow update: if false; // Payments are immutable
+          allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A villa construction project",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "clientName": { "type": "string" },
+        "contractorName": { "type": "string" },
+        "status": { "type": "string", "enum": ["ongoing", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["name", "clientName", "status", "createdAt", "updatedAt", "ownerId"]
+    },
+    "Trade": {
+      "title": "Trade",
+      "description": "A specific trade or corps de mÃ©tier within a project",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "designation": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "amount": { "type": "number" },
+        "totalAdvances": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "designation", "amount", "totalAdvances", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "A payment or advance made for a trade",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "tradeId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["advance", "expense", "income"] },
+        "designation": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "tradeId", "date", "amount", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Projects collection"
+    },
+    "/projects/{projectId}/trades/{tradeId}": {
+      "schema": { "$ref": "#/entities/Trade" },
+      "description": "Trades (corps de mÃ©tier) inside a project"
+    },
+    "/projects/{projectId}/trades/{tradeId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payments inside a trade"
+    }
+  }
+}
