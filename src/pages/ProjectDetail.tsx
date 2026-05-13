@@ -2,8 +2,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { getProject, getTravauxByProject, getPaymentsByTravaux } from '../services/api';
-import { Project, Travaux, Payment, PaymentType, PERIOD_OPTIONS, PeriodKey, getPeriodDates } from '../types';
+import { getProjects, getTravaux, getPayments, addPayment, updateTravaux } from '../services/api';
+import { Project, Travaux, Payment, PaymentType } from '../types';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { motion, AnimatePresence } from 'motion/react';
 import { Calendar, ChevronDown, Plus, X } from 'lucide-react';
@@ -27,26 +27,45 @@ export default function ProjectDetail() {
   // fetch data
   useEffect(() => {
     if (!uid || !projectId) return;
-    let cancelled = false;
-    const load = async () => {
-      const p = await getProject(uid, projectId);
-      const tlist = await getTravauxByProject(uid, projectId);
-      const payList: Payment[] = [];
-      for (const t of tlist) {
-        const pp = await getPaymentsByTravaux(uid, t.id);
-        payList.push(...pp);
-      }
-      if (!cancelled) {
-        setProject(p);
-        setTravauxList(tlist);
-        setPayments(payList);
-        setLoading(false);
-        if (tlist.length) setActiveTravaux(tlist[0].id);
-      }
+    
+    let isProjectLoaded = false;
+    let isTravauxLoaded = false;
+    
+    const checkLoading = () => {
+      if (isProjectLoaded && isTravauxLoaded) setLoading(false);
     };
-    load();
-    return () => { cancelled = true; };
+
+    const unsubProjects = getProjects(uid, (projectsList) => {
+      const p = projectsList.find(proj => proj.id === projectId) || null;
+      setProject(p);
+      isProjectLoaded = true;
+      checkLoading();
+    }, console.error);
+
+    const unsubTravaux = getTravaux(projectId, uid, (tlist) => {
+      setTravauxList(tlist);
+      if (tlist.length > 0 && !activeTravaux) {
+        setActiveTravaux(tlist[0].id);
+      }
+      isTravauxLoaded = true;
+      checkLoading();
+    }, console.error);
+
+    return () => { 
+      unsubProjects();
+      unsubTravaux();
+    };
   }, [uid, projectId]);
+
+  // fetch payments for the active travaux
+  useEffect(() => {
+    if (!uid || !projectId || !activeTravaux) return;
+    const unsubPayments = getPayments(projectId, activeTravaux, uid, (payList) => {
+      setPayments(payList);
+    }, console.error);
+    
+    return () => unsubPayments();
+  }, [uid, projectId, activeTravaux]);
 
   const currentTravaux = useMemo(() => travauxList.find(t => t.id === activeTravaux) || null, [travauxList, activeTravaux]);
   const filteredPayments = useMemo(() => payments.filter(p => p.tradeId === activeTravaux && p.type === activeTab), [payments, activeTravaux, activeTab]);
@@ -55,24 +74,43 @@ export default function ProjectDetail() {
 
   const handleAdd = async () => {
     if (!uid || !activeTravaux) return;
-    const newPay: Omit<Payment, 'id' | 'createdAt'> = {
-      projectId: projectId!,
-      tradeId: activeTravaux,
-      date: new Date(form.date),
-      amount: Number(form.amount),
-      type: activeTab,
-      designation: form.ref,
-      workerName: activeTab === 'main_doeuvre' ? form.worker : undefined,
-      paymentMethod: activeTab === 'client_advance' ? (form.method as any) : undefined,
-      blReference: activeTab === 'fourniture' ? form.bl : undefined,
-      receiptUrl: undefined,
-      ownerId: uid,
-    };
-    // API call placeholder
-    // await addPayment(uid, newPay);
-    setShowAdd(false);
-    // optimistic update
-    setPayments(prev => [...prev, { ...newPay, id: 'temp-' + Date.now(), createdAt: new Date() } as Payment]);
+    try {
+      const amount = Number(form.amount);
+      const newPay: Omit<Payment, 'id' | 'projectId' | 'tradeId' | 'createdAt'> = {
+        date: new Date(form.date),
+        amount,
+        type: activeTab,
+        designation: form.ref,
+        workerName: activeTab === 'main_doeuvre' ? form.worker : undefined,
+        paymentMethod: activeTab === 'client_advance' ? (form.method as any) : undefined,
+        blReference: activeTab === 'fourniture' ? form.bl : undefined,
+        receiptUrl: undefined,
+        ownerId: uid,
+      };
+      
+      await addPayment(projectId!, activeTravaux, newPay);
+      
+      // Update the travaux amounts accordingly
+      if (currentTravaux) {
+        let updateData: any = {};
+        if (activeTab === 'client_advance') {
+          updateData.totalClientAdvances = (currentTravaux.totalClientAdvances || 0) + amount;
+          updateData.totalAdvances = updateData.totalClientAdvances; // backward compat
+        } else if (activeTab === 'main_doeuvre') {
+          updateData.totalMainDoeuvre = (currentTravaux.totalMainDoeuvre || 0) + amount;
+        } else if (activeTab === 'fourniture') {
+          updateData.totalFourniture = (currentTravaux.totalFourniture || 0) + amount;
+        }
+        await updateTravaux(projectId!, activeTravaux, updateData);
+      }
+      
+      setShowAdd(false);
+      setForm({ amount: '', date: '', ref: '', worker: '', method: 'especes', bl: '' });
+      
+    } catch (err: any) {
+      console.error(err);
+      alert('Error adding payment: ' + err.message);
+    }
   };
 
   if (loading) return <div className="flex items-center justify-center h-64"><span className="elite-text-silver">{t('detail_travaux_saving')}</span></div>;
