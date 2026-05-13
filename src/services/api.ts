@@ -233,6 +233,22 @@ export const getPayments = (projectId: string, tradeId: string, userId: string, 
   });
 };
 
+export const getAllPayments = (userId: string, callback: (payments: Payment[]) => void, errorCallback: (error: any) => void) => {
+  const q = query(collectionGroup(db, 'payments'), where('ownerId', '==', userId));
+  return onSnapshot(q, (snapshot) => {
+    const payments: Payment[] = snapshot.docs.map(doc => ({
+      ...(doc.data() as any),
+      id: doc.id,
+      date: doc.data().date?.toDate(),
+      createdAt: doc.data().createdAt?.toDate()
+    }));
+    callback(payments);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, `payments group`);
+    errorCallback(error);
+  });
+};
+
 export const addPayment = async (projectId: string, tradeId: string, data: Omit<Payment, 'id' | 'projectId' | 'tradeId' | 'createdAt'>, receiptImageFile?: File | null) => {
   try {
     const path = `projects/${projectId}/trades/${tradeId}/payments`;
